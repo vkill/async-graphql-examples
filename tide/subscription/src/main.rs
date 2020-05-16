@@ -1,10 +1,11 @@
 use async_graphql::http::playground_source;
-use async_graphql::{Schema, WebSocketTransport};
+use async_graphql::{Schema, SubscriptionStream, WebSocketTransport};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
 use async_tungstenite::tungstenite::Message;
 use books::{MutationRoot, QueryRoot, Storage, SubscriptionRoot};
 use bytes::Bytes;
+use futures::channel::mpsc;
 use futures::select;
 use futures::{SinkExt, StreamExt};
 use std::env;
@@ -28,7 +29,9 @@ async fn run() -> Result<()> {
     let schema = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(Storage::default())
         .finish();
-    let schema_for_ws = schema.clone();
+    let (mut stx, srx) = schema
+        .clone()
+        .subscription_connection(WebSocketTransport::default());
 
     let app_state = AppState { schema };
     let mut app = tide::with_state(app_state);
@@ -47,7 +50,7 @@ async fn run() -> Result<()> {
         Ok(resp)
     });
 
-    task::spawn(async move { run_ws(schema_for_ws).await });
+    task::spawn(async move { run_ws(stx, srx).await });
 
     let listen_addr = env::var("LISTEN_ADDR").unwrap_or_else(|_| "localhost:8000".to_owned());
     println!("Playground: http://{}", listen_addr);
@@ -56,27 +59,32 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-async fn run_ws(schema: GQLSchema) -> Result<()> {
+async fn run_ws(
+    stx: mpsc::Sender<Bytes>,
+    srx: SubscriptionStream<QueryRoot, MutationRoot, SubscriptionRoot, WebSocketTransport>,
+) -> Result<()> {
     let listen_addr = env::var("WS_LISTEN_ADDR").unwrap_or_else(|_| "localhost:8001".to_owned());
     println!("WS Server: ws://{}", listen_addr);
     let listener = TcpListener::bind(&listen_addr).await?;
 
     while let Ok((stream, _)) = listener.accept().await {
-        task::spawn(accept_ws(stream, schema.clone()));
+        // TODO
+        // task::spawn(accept_ws(stream, stx.clone(), srx));
     }
 
     Ok(())
 }
 
-async fn accept_ws(stream: TcpStream, schema: GQLSchema) {
+async fn accept_ws(
+    stream: TcpStream,
+    mut stx: mpsc::Sender<Bytes>,
+    srx: SubscriptionStream<QueryRoot, MutationRoot, SubscriptionRoot, WebSocketTransport>,
+) {
     let ws_stream = async_tungstenite::accept_async(stream)
         .await
         .expect("Error during the websocket handshake occurred");
 
     let (mut tx, rx) = ws_stream.split();
-    let (mut stx, srx) = schema
-        .clone()
-        .subscription_connection(WebSocketTransport::default());
 
     let mut rx = rx.fuse();
     let mut srx = srx.fuse();
