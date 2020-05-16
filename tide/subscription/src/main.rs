@@ -58,6 +58,7 @@ async fn run() -> Result<()> {
 
 async fn run_ws(schema: GQLSchema) -> Result<()> {
     let listen_addr = env::var("WS_LISTEN_ADDR").unwrap_or_else(|_| "localhost:8001".to_owned());
+    println!("WS Server: ws://{}", listen_addr);
     let listener = TcpListener::bind(&listen_addr).await?;
 
     while let Ok((stream, _)) = listener.accept().await {
@@ -85,6 +86,7 @@ async fn accept_ws(stream: TcpStream, schema: GQLSchema) {
             bytes = srx.next() => {
                 if let Some(bytes) = bytes {
                     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                        println!("ws srx text: {}", text);
                         if tx.send(Message::Text(text)).await.is_err()
                         {
                             return;
@@ -97,6 +99,7 @@ async fn accept_ws(stream: TcpStream, schema: GQLSchema) {
             msg = rx.next() => {
                 if let Some(Ok(msg)) = msg {
                     if msg.is_text() {
+                        println!("ws rx text: {}", msg);
                         if stx.send(Bytes::copy_from_slice(&msg.into_data())).await.is_err() {
                             return;
                         }
@@ -121,6 +124,7 @@ mod tests {
             env::set_var("LISTEN_ADDR", format!("{}", listen_addr));
             let ws_listen_addr = find_listen_addr().await;
             env::set_var("WS_LISTEN_ADDR", format!("{}", ws_listen_addr));
+            env::set_var("WS_LISTEN_ADDR_PORT", format!("{}", ws_listen_addr.port()));
 
             let server: task::JoinHandle<Result<()>> = task::spawn(async move {
                 run().await?;
@@ -129,11 +133,21 @@ mod tests {
             });
 
             let ws_client: task::JoinHandle<Result<()>> = task::spawn(async move {
-                let ws_listen_addr = env::var("WS_LISTEN_ADDR").unwrap();
+                use async_tungstenite::async_std::connect_async;
 
-                task::sleep(Duration::from_millis(300)).await;
+                let ws_listen_addr_port = env::var("WS_LISTEN_ADDR_PORT").unwrap();
 
-                // TODO
+                task::sleep(Duration::from_millis(100)).await;
+
+                let (mut ws_stream, _) =
+                    connect_async(format!("ws://localhost:{}/graphql", ws_listen_addr_port))
+                        .await?;
+                while let Some(msg) = ws_stream.next().await {
+                    let msg = msg?;
+                    if msg.is_text() {
+                        println!("{:?}", msg);
+                    }
+                }
 
                 Ok(())
             });
@@ -158,7 +172,7 @@ mod tests {
                 Ok(())
             });
 
-            server.race(client).await?;
+            server.race(ws_client).await?;
 
             Ok(())
         })

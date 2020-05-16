@@ -8,7 +8,7 @@ edition = "2018"
 async-graphql = "1.12.2"
 async-graphql-tide = "1.4.8"
 tide = "0.8"
-async-tungstenite = "0.4.2"
+async-tungstenite = { version = "0.4.2", features = ["async-std-runtime"] }
 async-std = "1.5.0"
 futures = "0.3.5"
 bytes = "0.5.4"
